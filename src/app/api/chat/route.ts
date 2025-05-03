@@ -1,27 +1,30 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { OpenAI } from 'openai';
 
 const openai = new OpenAI({
-  apiKey: process.env.AZURE_OPENAI_API_KEY,
-  baseURL: `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/GPT4o`,
+  apiKey: process.env.AZURE_OPENAI_API_KEY!,
+  baseURL: process.env.AZURE_OPENAI_ENDPOINT,
   defaultHeaders: {
-    'api-key': process.env.AZURE_OPENAI_API_KEY,
-  },
-  defaultQuery: {
-    'api-version': process.env.AZURE_OPENAI_API_VERSION,
+    'api-version': '2024-05-01-preview',
   },
 });
 
 export async function POST(request: Request) {
   try {
-    const { message, threadId, formData } = await request.json();
+    const { message, threadId } = await request.json();
     const assistantId = process.env.AZURE_ASSISTANT_ID;
 
+    if (!assistantId) {
+      return NextResponse.json({ error: 'AZURE_ASSISTANT_ID is not set in environment.' }, { status: 500 });
+    }
+
     // Create a new thread if not provided
-    let thread_id = threadId;
-    if (!thread_id) {
+    let thread_id: string;
+    if (!threadId) {
       const thread = await openai.beta.threads.create();
       thread_id = thread.id;
+    } else {
+      thread_id = threadId;
     }
 
     // Add user message to the thread
@@ -43,9 +46,18 @@ export async function POST(request: Request) {
 
     if (run.status === 'completed') {
       const messages = await openai.beta.threads.messages.list(thread_id);
-      // Get the last assistant message
+      // Find the last assistant message with text
       const assistantMessage = messages.data.reverse().find(m => m.role === 'assistant');
-      return NextResponse.json({ response: assistantMessage?.content?.[0]?.text?.value || 'No response from assistant.' });
+      let responseText = 'No response from assistant.';
+      if (assistantMessage && Array.isArray(assistantMessage.content)) {
+        const textBlock = assistantMessage.content.find(
+          (block: any) => block.type === 'text' && block.text?.value
+        );
+        if (textBlock) {
+          responseText = textBlock.text.value;
+        }
+      }
+      return NextResponse.json({ response: responseText });
     } else if (run.status === 'requires_action') {
       // Handle tool calls if needed
       return NextResponse.json({ response: 'The assistant requires additional actions.' });
